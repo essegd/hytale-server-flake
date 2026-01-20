@@ -1,10 +1,10 @@
 # Hytale Server Flake
 
-A Nix flake that provides packages and modules for the Hytale server.
+A Nix flake that provides a module for configuring Hytale servers.
 
 ## Current features
 
-- Module for configuring Hytale servers
+- Module for configuring Hytale servers (you guessed it)
   - Service to automatically download server assets
   - Support for linking files from the store (such as plugins) into the server
     directory
@@ -21,7 +21,7 @@ A Nix flake that provides packages and modules for the Hytale server.
   };
   ```
 
-- Add the following to your system configuration, adjusting to your needs:
+- Add the following to your system configuration and tweak to your needs:
 
   ```nix
   imports = [
@@ -55,14 +55,15 @@ configuration if `autoStart` is set), the downloader service will hang.
 Unfortunately this is just how it is, because it is required to log in in order
 to download the game assets. When the downloader service starts, it creates a
 FIFO at `/run/hytale-downloader-XXXXXX`. Reading the pipe will emit the
-authentication URL, and the service will resume upon authentication. This will
-be necessary every time the token expires.
+authentication URL, and the download will start once you have authenticated.
+This will be necessary every time the token expires.
 
 ## Caveats
 
 Parts of the module are, admittedly, a bit messy right now. This is my first Nix
 project, I spent a bit of time on this and I just wanted to get it out there
-before shifting my focus to other stuff.
+before shifting my focus to other stuff. So far, the following things do not
+work correctly:
 
 - Services will hang on first launch since credentials are required
 - Server doesn't log to the journal when tmux is used
@@ -75,7 +76,8 @@ PR, it would also be very much appreciated.
 ## Roadmap
 
 - Package the Hytale launcher (and of course rename the flake to reflect this)
-- Don't block or fail when the auth token isn't valid
+- Make the downloader service not block or fail when the auth token isn't
+  valid, but also maintain the server service's dependency on the downloader
 - Improve the activation script (cleanup code, support setting permission flags)
 - Write tests for the Hytale server and asset downloader
 
