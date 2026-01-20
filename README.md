@@ -16,7 +16,7 @@ A Nix flake that provides a module for configuring Hytale servers.
 
   ```nix
   inputs.hytale-flake = {
-    url = "github:essegd/hytale-flake";
+    url = "github:essegd/hytale-server-flake";
     inputs.nixpkgs.follows = "nixpkgs";
   };
   ```
