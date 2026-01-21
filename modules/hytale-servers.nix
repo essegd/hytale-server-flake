@@ -398,6 +398,7 @@ in {
           script = let
             hytaleDownloader = lib.getExe flakePkgs.hytale-downloader;
             unzip = lib.getExe pkgs.unzip;
+            jq = lib.getExe pkgs.jq;
           in ''
             set -eo pipefail
 
@@ -415,8 +416,7 @@ in {
 
             request_auth() {
               auth_out="$(mktemp -up "$RUNTIME_DIRECTORY" auth.XXXXXX)"
-              mkfifo "$auth_out"
-              chmod 700 "$auth_out"
+              mkfifo "$auth_out"; chmod 700 "$auth_out"
 
               # causes the downloader to request authentication
               hytale_downloader -print-version > "$auth_out"
@@ -428,14 +428,22 @@ in {
               if output="$(hytale_downloader "$@")"; then
                 echo "$output"
               else
-                rm "$CREDENTIALS_PATH"
-                request_auth
+                rm "$CREDENTIALS_PATH"; request_auth
 
                 hytale_downloader "$@"
               fi
             }
 
-            if [ ! -e "$CREDENTIALS_PATH" ]; then request_auth; fi
+            # check if the token has expired, and refresh it if so
+            if [ -e "$CREDENTIALS_PATH" ]; then
+              auth_expires_at="$("${jq}" .expires_at "$CREDENTIALS_PATH")"
+              current_time="$(date +%s)"
+              if [ "$current_time" -ge "$auth_expires_at" ]; then
+                rm "$CREDENTIALS_PATH"; request_auth
+              fi
+            else
+              request_auth
+            fi
 
             game_version="$(try_hytale_downloader -print-version)"
             assets_dir="${cfg.assetsDir}/$patchline-$game_version"
