@@ -76,8 +76,8 @@ PR, it would also be very much appreciated.
 ## Roadmap
 
 - Package the Hytale launcher (and of course rename the flake to reflect this)
-- Make the downloader service not block or fail when the auth token isn't
-  valid, but also maintain the server service's dependency on the downloader
+- Make the downloader service not block or fail when the auth token isn't valid,
+  but also maintain the server service's dependency on the downloader
 - Improve the activation script (cleanup code, support setting permission flags)
 - Write tests for the Hytale server and asset downloader
 
