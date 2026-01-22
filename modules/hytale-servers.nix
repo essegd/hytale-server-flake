@@ -402,54 +402,54 @@ in {
             CREDENTIALS_PATH="${cfg.credentialsPath}"
 
             hytale_downloader() {
-                hytale-downloader \
-                    -skip-update-check \
-                    -patchline "$patchline" \
-                    -credentials-path "$CREDENTIALS_PATH" \
-                    "$@"
+              hytale-downloader \
+                -skip-update-check \
+                -patchline "$patchline" \
+                -credentials-path "$CREDENTIALS_PATH" \
+                "$@"
             }
 
             request_auth() {
-                auth_out="$(mktemp -up "$RUNTIME_DIRECTORY" auth.XXXXXX)"
-                mkfifo "$auth_out"; chmod 700 "$auth_out"
+              auth_out="$(mktemp -up "$RUNTIME_DIRECTORY" auth.XXXXXX)"
+              mkfifo "$auth_out"; chmod 700 "$auth_out"
 
-                # cause the downloader to request authentication
-                hytale_downloader -print-version > "$auth_out"
+              # cause the downloader to request authentication
+              hytale_downloader -print-version > "$auth_out"
 
-                rm "$auth_out"
+              rm "$auth_out"
             }
 
             try_hytale_downloader() {
-                if output="$(hytale_downloader "$@")"; then
-                    echo "$output"
-                else
-                    rm "$CREDENTIALS_PATH"; request_auth
+              if output="$(hytale_downloader "$@")"; then
+                echo "$output"
+              else
+                rm "$CREDENTIALS_PATH"; request_auth
 
-                    hytale_downloader "$@"
-                fi
+                hytale_downloader "$@"
+              fi
             }
 
             # check if the token has expired, and refresh it if so
             if [ -e "$CREDENTIALS_PATH" ]; then
-                auth_expires_at="$(jq .expires_at "$CREDENTIALS_PATH")"
-                current_time="$(date +%s)"
-                if [ "$current_time" -ge "$auth_expires_at" ]; then
-                    rm "$CREDENTIALS_PATH"; request_auth
-                fi
+              auth_expires_at="$(jq .expires_at "$CREDENTIALS_PATH")"
+              current_time="$(date +%s)"
+              if [ "$current_time" -ge "$auth_expires_at" ]; then
+                rm "$CREDENTIALS_PATH"; request_auth
+              fi
             else
-                request_auth
+              request_auth
             fi
 
             game_version="$(try_hytale_downloader -print-version)"
             game_dir="$ASSETS_DIR/$patchline-$game_version"
 
             if [ ! -d "$game_dir" ]; then
-                download_dir=$(mktemp -d)
-                try_hytale_downloader -download-path "$download_dir/assets.zip"
+              download_dir=$(mktemp -d)
+              try_hytale_downloader -download-path "$download_dir/assets.zip"
 
-                mkdir -p "$game_dir"
-                unzip "$download_dir/assets.zip" -d "$game_dir"
-                rm -r "$download_dir"
+              mkdir -p "$game_dir"
+              unzip "$download_dir/assets.zip" -d "$game_dir"
+              rm -r "$download_dir"
             fi
 
             ln -sf "$patchline-$game_version" "$ASSETS_DIR/$patchline"
