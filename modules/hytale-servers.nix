@@ -10,6 +10,7 @@ self: {
     lists
     strings
     types
+    getExe
     mkOption
     mkEnableOption
     mkIf
@@ -388,6 +389,73 @@ in {
         targetServers;
 
       systemd.services = let
+        hytaleDownloaderWrapper = pkgs.writeShellApplication {
+          name = "hytale-downloader-wrapper";
+          runtimeInputs = with pkgs; [
+            flakePkgs.hytale-downloader
+            jq
+            unzip
+          ];
+          text = ''
+            patchline="$1"
+            ASSETS_DIR="${cfg.assetsDir}"
+            CREDENTIALS_PATH="${cfg.credentialsPath}"
+
+            hytale_downloader() {
+                hytale-downloader \
+                    -skip-update-check \
+                    -patchline "$patchline" \
+                    -credentials-path "$CREDENTIALS_PATH" \
+                    "$@"
+            }
+
+            request_auth() {
+                auth_out="$(mktemp -up "$RUNTIME_DIRECTORY" auth.XXXXXX)"
+                mkfifo "$auth_out"; chmod 700 "$auth_out"
+
+                # cause the downloader to request authentication
+                hytale_downloader -print-version > "$auth_out"
+
+                rm "$auth_out"
+            }
+
+            try_hytale_downloader() {
+                if output="$(hytale_downloader "$@")"; then
+                    echo "$output"
+                else
+                    rm "$CREDENTIALS_PATH"; request_auth
+
+                    hytale_downloader "$@"
+                fi
+            }
+
+            # check if the token has expired, and refresh it if so
+            if [ -e "$CREDENTIALS_PATH" ]; then
+                auth_expires_at="$(jq .expires_at "$CREDENTIALS_PATH")"
+                current_time="$(date +%s)"
+                if [ "$current_time" -ge "$auth_expires_at" ]; then
+                    rm "$CREDENTIALS_PATH"; request_auth
+                fi
+            else
+                request_auth
+            fi
+
+            game_version="$(try_hytale_downloader -print-version)"
+            game_dir="$ASSETS_DIR/$patchline-$game_version"
+
+            if [ ! -d "$game_dir" ]; then
+                download_dir=$(mktemp -d)
+                try_hytale_downloader -download-path "$download_dir/assets.zip"
+
+                mkdir -p "$game_dir"
+                unzip "$download_dir/assets.zip" -d "$game_dir"
+                rm -r "$download_dir"
+            fi
+
+            ln -sf "$patchline-$game_version" "$ASSETS_DIR/$patchline"
+          '';
+        };
+
         hytaleDownloaderService = {
           description = "Hytale Downloader Service (%I patchline)";
 
@@ -395,75 +463,9 @@ in {
           # make service run serially, so that multiple access tokens aren't requested at the same time
           after = ["hytale-downloader@.service" "network-online.target"];
 
-          script = let
-            hytaleDownloader = lib.getExe flakePkgs.hytale-downloader;
-            unzip = lib.getExe pkgs.unzip;
-            jq = lib.getExe pkgs.jq;
-          in ''
-            set -eo pipefail
-
-            CREDENTIALS_PATH="${cfg.credentialsPath}"
-
-            patchline=$1
-
-            hytale_downloader() {
-              "${hytaleDownloader}" \
-                -skip-update-check \
-                -patchline "$patchline" \
-                -credentials-path "$CREDENTIALS_PATH" \
-                "$@"
-            }
-
-            request_auth() {
-              auth_out="$(mktemp -up "$RUNTIME_DIRECTORY" auth.XXXXXX)"
-              mkfifo "$auth_out"; chmod 700 "$auth_out"
-
-              # cause the downloader to request authentication
-              hytale_downloader -print-version > "$auth_out"
-
-              rm "$auth_out"
-            }
-
-            try_hytale_downloader() {
-              if output="$(hytale_downloader "$@")"; then
-                echo "$output"
-              else
-                rm "$CREDENTIALS_PATH"; request_auth
-
-                hytale_downloader "$@"
-              fi
-            }
-
-            # check if the token has expired, and refresh it if so
-            if [ -e "$CREDENTIALS_PATH" ]; then
-              auth_expires_at="$("${jq}" .expires_at "$CREDENTIALS_PATH")"
-              current_time="$(date +%s)"
-              if [ "$current_time" -ge "$auth_expires_at" ]; then
-                rm "$CREDENTIALS_PATH"; request_auth
-              fi
-            else
-              request_auth
-            fi
-
-            game_version="$(try_hytale_downloader -print-version)"
-            assets_dir="${cfg.assetsDir}/$patchline-$game_version"
-
-            if [ ! -d "$assets_dir" ]; then
-              download_dir=$(mktemp -d)
-              try_hytale_downloader -download-path "$download_dir/assets.zip"
-
-              mkdir -p "$assets_dir"
-              ${unzip} "$download_dir/assets.zip" -d "$assets_dir"
-              rm -r "$download_dir"
-            fi
-
-            ln -sf "$patchline-$game_version" "${cfg.assetsDir}/$patchline"
-          '';
-          scriptArgs = "%I";
-          enableStrictShellChecks = true;
-
           serviceConfig = {
             Type = "oneshot";
+            ExecStart = "${getExe hytaleDownloaderWrapper} %I";
 
             TimeoutStartSec = "10m";
 
@@ -481,10 +483,10 @@ in {
         mkServerSessionScripts = server: let
           socketPath = "${cfg.runtimeDir}/${server.name}.sock";
           fifoPath = "${cfg.runtimeDir}/${server.name}.stdin";
-          tmux = "${lib.getExe pkgs.tmux} -S ${socketPath}";
+          tmux = "${getExe pkgs.tmux} -S ${socketPath}";
 
           serverLaunchCommand = with server; ''
-            ${lib.getExe java.package} \
+            ${getExe java.package} \
               -XX:AOTCache="${assetsDir}/Server/HytaleServer.aot" \
               ${java.jvmOpts} \
               -jar "${assetsDir}/Server/HytaleServer.jar" \
@@ -612,14 +614,12 @@ in {
       # \_________________________________  __________________________/
       #                                   |/
       system.activationScripts.linkHytaleServerFiles = let
-        cmp = "${pkgs.diffutils}/bin/cmp";
-        lndir = lib.getExe pkgs.xorg.lndir;
-        sudo = lib.getExe pkgs.sudo;
-
         gcRootsPath = "/nix/var/nix/gcroots/hytale";
 
         mkServerFilesPackage = server:
-          pkgs.runCommandLocal "hytale-server-${server.name}-files" {} (
+          pkgs.runCommandLocal "hytale-server-${server.name}-files" {
+            nativeBuildInputs = with pkgs; [xorg.lndir];
+          } (
             ''
               mkdir -p $out
 
@@ -633,7 +633,7 @@ in {
                 mkdir -p "$(dirname "$pkgDestination")"
                 if [ "$method" == "symlink" ]; then
                   if [ -d "$source" ]; then
-                    ${lndir} -silent "$source" "$pkgDestination"
+                    lndir -silent "$source" "$pkgDestination"
                   else
                     ln -sfn "$source" "$pkgDestination"
                   fi
@@ -657,84 +657,97 @@ in {
             mapAttrsToList (serverName: pkg: f enabledServers."${serverName}" pkg) serverFilesPackages
           );
 
-        cleanup = pkgs.writeShellScript "cleanup" ''
-          baseDir="$1"
-          destination="$2"
-          shift 2; files=("$@")
+        cleanOldFiles = pkgs.writeShellApplication {
+          name = "clean-old-files";
+          runtimeInputs = with pkgs; [diffutils];
+          text = ''
+            prev_dir="$1"
+            target_dir="$2"
+            shift 2
 
-          for file in "''${files[@]}"; do
-            prevFile="$baseDir/$file"
-            targetFile="$destination/$file"
-            targetBaseDir="$(dirname "$targetFile")"
+            for file in "$@"; do
+              prev_file="$prev_dir/$file"
+              target_file="$target_dir/$file"
 
-            if ${cmp} -s "$prevFile" "$targetFile"; then rm -rf "$targetFile"; fi
+              echo "prev: $prev_file" >&2
+              echo "target: $target_file" >&2
 
-            # remove the directories that have been made empty unless it's the server data root
-            if [ -d "$targetBaseDir" ] && [ "$targetBaseDir" != "$destination" ]; then
-              rmdir -p --ignore-fail-on-non-empty "$targetBaseDir"
-            fi
-          done
-        '';
+              if cmp -s "$prev_file" "$target_file"; then rm -rf "$target_file"; fi
 
-        link = pkgs.writeShellScript "link" ''
-          LINK_PATTERN="${lib.escapeShellArg builtins.storeDir}/*-hytale-server-*-files/*"
+              # remove the directories that have been made empty unless it's the server data root
+              target_base_dir="$(dirname "$target_file")"
+              if [ -d "$target_base_dir" ] && [ "$target_base_dir" != "$target_dir" ]; then
+                rmdir -p --ignore-fail-on-non-empty "$target_base_dir"
+              fi
+            done
+          '';
+        };
 
-          baseDir="$1"
-          destination="$2"
-          shift 2; files=("$@")
+        linkFiles = pkgs.writeShellApplication {
+          name = "link-files";
+          runtimeInputs = with pkgs; [diffutils];
+          text = ''
+            LINK_PATTERN="${lib.escapeShellArg builtins.storeDir}/*-hytale-server-*-files/*"
 
-          warnSkipFile() {
-            echo "Not overwriting existing file: $1" >&2
-          }
+            warn_skip_file() {
+              echo "Not overwriting existing file: $1" >&2
+            }
 
-          for file in "''${files[@]}"; do
-            srcFile="$baseDir/$file"
-            dstFile="$destination/$file"
+            src_dir="$1"
+            dst_dir="$2"
+            shift 2
 
-            if [ -L "$srcFile" ]; then
-              if [ -e "$dstFile" ]; then
-                # if it's identical to the one that's already there, don't bother
-                if [ "$(readlink -e "$srcFile")" = "$(readlink -e "$dstFile")" ]; then continue
-                # if it looks like a stale link to an old file, get rid of it
-                elif [ ! "$(readlink "$dstFile")" == "$LINK_PATTERN" ]; then
-                  warnSkipFile "$dstFile"
+            for file in "$@"; do
+              src_file="$src_dir/$file"
+              dst_file="$dst_dir/$file"
+
+              echo "src: $src_file" >&2
+              echo "dst: $dst_file" >&2
+
+              if [ -L "$src_file" ]; then
+                if [ -e "$dst_file" ]; then
+                  # if it's identical to the one that's already there, don't bother
+                  if [ "$(readlink -e "$src_file")" = "$(readlink -e "$dst_file")" ]; then continue
+                  # if it looks like a stale link to an old file, get rid of it
+                  elif [ ! "$(readlink "$dst_file")" == "$LINK_PATTERN" ]; then
+                    warn_skip_file "$dst_file"
+                    continue
+                  fi
+                fi
+
+                mkdir -p "$(dirname "$dst_file")"
+                ln -Tsf "$src_file" "$dst_file"
+              else
+                if [ -e "$dst_file" ]; then
+                  # if it's identical to the one that's already there, don't bother
+                  if cmp -s "$src_file" "$dst_file"; then continue; fi
+                  warn_skip_file "$dst_file"
                   continue
                 fi
+
+                rm -rf "$dst_file"
+                mkdir -p "$(dirname "$dst_file")"
+                cp -r "$src_file" "$dst_file"; chmod -R ug+w "$dst_file"
               fi
+            done
+          '';
+        };
 
-              mkdir -p "$(dirname "$dstFile")"
-              ln -Tsf "$srcFile" "$dstFile"
-            else
-              if [ -e "$dstFile" ]; then
-                # if it's identical to the one that's already there, don't bother
-                if ${cmp} -s "$srcFile" "$dstFile"; then continue; fi
-                warnSkipFile "$dstFile"
-                continue
-              fi
-
-              rm -rf "$dstFile"
-              mkdir -p "$(dirname "$dstFile")"
-              cp -r "$srcFile" "$dstFile"
-              chmod -R ug+w "$dstFile"
-            fi
-          done
-        '';
-
-        makeServerFiles = pkgs.writeShellScript "make-hytale-server-files" ''
+        activateFilesScript = pkgs.writeShellScript "make-server-files" ''
           umask 007
 
           ${genServerPackagesCommands (
             server: pkg: ''
               find -L "${gcRootsPath}/${pkg.name}" \( -type f -or -type l \) -printf '%P\0' \
-                | xargs -0 "${cleanup}" "${gcRootsPath}/${pkg.name}" "${server.dataDir}"
+                | xargs -0 "${getExe cleanOldFiles}" "${gcRootsPath}/${pkg.name}" "${server.dataDir}"
 
               find -L "${pkg}" \( -type f -or -type l \) -printf '%P\0' \
-                | xargs -0 "${link}" "${pkg}" "${server.dataDir}"
+                | xargs -0 "${getExe linkFiles}" "${pkg}" "${server.dataDir}"
             ''
           )}
         '';
 
-        updateGcRoots = pkgs.writeShellScript "update-hytale-gc-roots" ''
+        updateGcRootsScript = pkgs.writeShellScript "update-hytale-gc-roots" ''
           if [ -d "${gcRootsPath}" ]; then rm -rf "${gcRootsPath}"; fi
           mkdir -p "${gcRootsPath}"
 
@@ -746,8 +759,8 @@ in {
         '';
       in {
         text = ''
-          ${sudo} -u hytale ${makeServerFiles}
-          ${updateGcRoots}
+          ${getExe pkgs.sudo} -u hytale ${activateFilesScript}
+          ${updateGcRootsScript}
         '';
       };
 
