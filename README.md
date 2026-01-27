@@ -50,13 +50,14 @@ A Nix flake that provides a module for configuring Hytale servers.
 
 More options can be seen in the source.
 
-When first starting the server (which will be immediately after switching your
-configuration if `autoStart` is set), the downloader service will hang.
-Unfortunately this is just how it is, because it is required to log in in order
-to download the game assets. When the downloader service starts, it creates a
-FIFO at `/run/hytale-downloader-XXXXXX`. Reading the pipe will emit the
-authentication URL, and the download will start once you have authenticated.
-This will be necessary every time the token expires.
+Unless `autoUpdate` is set, it is necessary to download the assets once before
+starting the service; to do this, run
+`systemctl start hytale-downloader@release` (or
+`systemctl start hytale-downloader@pre-release`), and check the journal for
+authentication instructions. `autoUpdate` currently blocks the service from
+starting while waiting for authentication, so it is not recommended to set this
+alongside `autoEnable`, as this will cause Nix configuration switches and
+reboots to hang. This behaviour will be changed in the future.
 
 ## Caveats
 

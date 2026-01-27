@@ -189,6 +189,17 @@ in {
             example = true;
           };
 
+          autoUpdate = mkOption {
+            type = types.bool;
+            default = false;
+            description = ''
+              Whether to automatically update the Hytale server binary and assets on startup.
+              This currrently blocks startup until authentication is provided, so it is
+              not recommended to set this option alongside `autoStart`.
+            '';
+            example = true;
+          };
+
           patchline = mkOption {
             type = types.enum [
               "release"
@@ -389,17 +400,18 @@ in {
         targetServers;
 
       systemd.services = let
-        hytaleDownloaderWrapper = pkgs.writeShellApplication {
-          name = "hytale-downloader-wrapper";
+        hytaleAutoDownloaderScript = pkgs.writeShellApplication {
+          name = "hytale-auto-downloader";
           runtimeInputs = with pkgs; [
             flakePkgs.hytale-downloader
             jq
             unzip
           ];
           text = ''
-            patchline="$1"
             ASSETS_DIR="${cfg.assetsDir}"
             CREDENTIALS_PATH="${cfg.credentialsPath}"
+
+            patchline="$1"
 
             hytale_downloader() {
               hytale-downloader \
@@ -412,6 +424,8 @@ in {
             request_auth() {
               auth_out="$(mktemp -up "$RUNTIME_DIRECTORY" auth.XXXXXX)"
               mkfifo "$auth_out"; chmod 700 "$auth_out"
+
+              echo "Authentication needed; please read \`$auth_out\` as the \`${cfg.user}\` user"
 
               # cause the downloader to request authentication
               hytale_downloader -print-version > "$auth_out"
@@ -456,16 +470,16 @@ in {
           '';
         };
 
-        hytaleDownloaderService = {
-          description = "Hytale Downloader Service (%I patchline)";
+        hytaleAutoDownloaderService = {
+          description = "Hytale Auto-downloader Service (%I patchline)";
 
           wants = ["network-online.target"];
           # make service run serially, so that multiple access tokens aren't requested at the same time
-          after = ["hytale-downloader@.service" "network-online.target"];
+          after = ["hytale-auto-downloader@.service" "network-online.target"];
 
           serviceConfig = {
             Type = "oneshot";
-            ExecStart = "${getExe hytaleDownloaderWrapper} %I";
+            ExecStart = "${getExe hytaleAutoDownloaderScript} %I";
 
             TimeoutStartSec = "10m";
 
@@ -524,7 +538,7 @@ in {
         };
 
         mkHytaleServerService = server: let
-          optionalDownloaderDependency = lib.optional (isNull server.version) "hytale-downloader@${server.patchline}.service";
+          optionalDownloaderDependency = lib.optional (isNull server.version && server.autoUpdate) "hytale-auto-downloader@${server.patchline}.service";
           optionalSocketDependency = lib.optional (!server.tmux.enable) "hytale-server-${server.name}.socket";
 
           sessionScripts = mkServerSessionScripts server;
@@ -602,7 +616,7 @@ in {
         };
       in
         {
-          "hytale-downloader@" = hytaleDownloaderService;
+          "hytale-auto-downloader@" = hytaleAutoDownloaderService;
         }
         // mapAttrs' (
           _: server: nameValuePair "hytale-server-${server.name}" (mkHytaleServerService server)
@@ -759,17 +773,28 @@ in {
       };
 
       warnings = let
-        targetServers =
+        versionPinnedServers =
           attrsets.filterAttrs (
             _: c: !isNull c.version && !c.acknowledgeVersionWarning
           )
           enabledServers;
+
+        autoStartingUpdatingServers =
+          attrsets.filterAttrs (
+            _: c: c.autoStart && c.autoUpdate
+          )
+          enabledServers;
       in
-        attrsets.mapAttrsToList (_: server: ''
-          Hytale server ${server.name} has `version` set to `${server.version}`. It is not recommended to pin the server version. Please remove this field or set
-          `acknowledgeVersionWarning = true;` in your server's attributes to disable this warning.
-        '')
-        targetServers;
+        (attrsets.mapAttrsToList (_: server: ''
+            Hytale server ${server.name} has `version` set to `${server.version}`. It is not recommended to pin the server version. Please remove this field or set
+            `acknowledgeVersionWarning = true;` in your server's attributes to disable this warning.
+          '')
+          versionPinnedServers)
+        ++ (attrsets.mapAttrsToList (_: server: ''
+            Hytale server ${server.name} has both `autoStart` and `autoUpdate` enabled. This behaviour is currently unstable, and will cause the system startup and
+            Nix configuration switches to hang. Please unset one of these options.
+          '')
+          autoStartingUpdatingServers);
     }
   );
 }
