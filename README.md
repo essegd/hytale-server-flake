@@ -53,7 +53,7 @@ More options can be seen in the source.
 
 `autoUpdate` is required to be manually run on initial bootstrapping,
 due to requiring authentication. To do this run:
-`systemctl start hytale-auto-downloaderr@release` (or
+`systemctl start hytale-auto-downloader@release` (or
 `systemctl start hytale-auto-downloader@pre-release`), and check the journal for
 authentication instructions. `autoUpdate` currently blocks the service from
 starting while waiting for authentication, so it is not recommended to set this
