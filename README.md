@@ -52,8 +52,8 @@ More options can be seen in the source.
 
 Unless `autoUpdate` is set, it is necessary to download the assets once before
 starting the service; to do this, run
-`systemctl start hytale-auto-downloader@release` (or
-`systemctl start hytale-auto-downloader@pre-release`), and check the journal for
+`systemctl start hytale-downloader@release` (or
+`systemctl start hytale-downloader@pre-release`), and check the journal for
 authentication instructions. `autoUpdate` currently blocks the service from
 starting while waiting for authentication, so it is not recommended to set this
 alongside `autoEnable`, as this will cause Nix configuration switches and
