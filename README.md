@@ -33,9 +33,10 @@ A Nix flake that provides a module for configuring Hytale servers.
 
     servers = {
       foobar = {
+        autoUpdate = true;
         enable = true;
         listenAddress = "12.34.56.78";
-        port = "5520";
+        port = 5520;
         openFirewall = true;
         patchline = "release";
         #tmux.enable = true;
@@ -50,13 +51,13 @@ A Nix flake that provides a module for configuring Hytale servers.
 
 More options can be seen in the source.
 
-Unless `autoUpdate` is set, it is necessary to download the assets once before
-starting the service; to do this, run
-`systemctl start hytale-downloader@release` (or
-`systemctl start hytale-downloader@pre-release`), and check the journal for
+`autoUpdate` is required to be manually run on initial bootstrapping,
+due to requiring authentication. To do this run:
+`systemctl start hytale-auto-downloaderr@release` (or
+`systemctl start hytale-auto-downloader@pre-release`), and check the journal for
 authentication instructions. `autoUpdate` currently blocks the service from
 starting while waiting for authentication, so it is not recommended to set this
-alongside `autoEnable`, as this will cause Nix configuration switches and
+alongside `autoStart`, as this will cause Nix configuration switches and
 reboots to hang. This behaviour will be changed in the future.
 
 ## Caveats
